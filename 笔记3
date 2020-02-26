@@ -1,0 +1,103 @@
+resnet：
+resnet的基本结构是残差块，在图像分类案例2的比赛中我使用了resnet50，达到了87%的准确率
+深度学习的问题：深度CNN网络达到一定深度后再一味地增加层数并不能带来进一步地分类性能提高，反而会招致网络收敛变得更慢，准确率也变得更差。
+class Residual(nn.Module):  # 本类已保存在d2lzh_pytorch包中方便以后使用
+    #可以设定输出通道数、是否使用额外的1x1卷积层来修改通道数以及卷积层的步幅。
+    def __init__(self, in_channels, out_channels, use_1x1conv=False, stride=1):
+        super(Residual, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, stride=stride)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        if use_1x1conv:
+            self.conv3 = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride)
+        else:
+            self.conv3 = None
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+
+    def forward(self, X):
+        Y = F.relu(self.bn1(self.conv1(X)))
+        Y = self.bn2(self.conv2(Y))
+        if self.conv3:
+            X = self.conv3(X)
+        return F.relu(Y + X)
+        
+凸优化：
+这一节中学会了一些数学凸优化理论，寻找全局最小值的一些挑战，以及如何利用海森矩阵判断是否是鞍点的问题
+尽管优化方法可以最小化深度学习中的损失函数值，但本质上优化方法达到的目标与深度学习的目标并不相同。
+优化方法目标：训练集损失函数值
+深度学习目标：测试集损失函数值（泛化性）
+
+梯度下降：
+主要介绍了不同学习率带来的情况
+Heissan阵辅助梯度下降
+梯度下降与线性搜索（共轭梯度法）
+
+优化算法进阶：
+讲解了动量在SGD的运用，Adam，AdaGrad，RMSProp，AdaDelta等优化器的原理及简洁实现
+其中目前最常用的还是性能优良的Adam和改进的SGD（带有动量和衰减参数）
+
+word2vec，词嵌入进阶：
+由于one-hot编码不能解释相似度，所以发明词向量
+从最开始的skip-gram,CBOW到ELMo，再到现在的Glove，Transformer，BERT
+原始的模型未考虑上下文，或只是局部单向的。目前斯坦福小组发明的Glove性能良好，不仅使用了统计的方法，还考虑了上下文
+Glove是LSA和ELMo的结合
+
+文本分类：
+该项目中使用了预训练好的Glove词向量，使用双向的rnn模型和cnn模型，对比可知rnn一类时序模型更适合nlp的领域
+class BiRNN(nn.Module):
+    def __init__(self, vocab, embed_size, num_hiddens, num_layers):
+        '''
+        @params:
+            vocab: 在数据集上创建的词典，用于获取词典大小
+            embed_size: 嵌入维度大小
+            num_hiddens: 隐藏状态维度大小
+            num_layers: 隐藏层个数
+        '''
+        super(BiRNN, self).__init__()
+        self.embedding = nn.Embedding(len(vocab), embed_size)
+        
+        # encoder-decoder framework
+        # bidirectional设为True即得到双向循环神经网络
+        self.encoder = nn.LSTM(input_size=embed_size, 
+                                hidden_size=num_hiddens, 
+                                num_layers=num_layers,
+                                bidirectional=True)
+        self.decoder = nn.Linear(4*num_hiddens, 2) # 初始时间步和最终时间步的隐藏状态作为全连接层输入
+        
+    def forward(self, inputs):
+        '''
+        @params:
+            inputs: 词语下标序列，形状为 (batch_size, seq_len) 的整数张量
+        @return:
+            outs: 对文本情感的预测，形状为 (batch_size, 2) 的张量
+        '''
+        # 因为LSTM需要将序列长度(seq_len)作为第一维，所以需要将输入转置
+        embeddings = self.embedding(inputs.permute(1, 0)) # (seq_len, batch_size, d)
+        # rnn.LSTM 返回输出、隐藏状态和记忆单元，格式如 outputs, (h, c)
+        outputs, _ = self.encoder(embeddings) # (seq_len, batch_size, 2*h)
+        encoding = torch.cat((outputs[0], outputs[-1]), -1) # (batch_size, 4*h)
+        outs = self.decoder(encoding) # (batch_size, 2)
+        return outs
+  
+数据增强：
+大规模数据集是成功应用深度神经网络的前提。
+图像增广（image augmentation）技术通过对训练图像做一系列随机改变，来产生相似但又不同的训练样本，从而扩大训练数据集的规模。
+图像增广的另一种解释是，随机改变训练样本可以降低模型对某些属性的依赖，从而提高模型的泛化能力。
+例如，我们可以对图像进行不同方式的裁剪，使感兴趣的物体出现在不同位置，从而减轻模型对物体出现位置的依赖性。
+我们也可以调整亮度、色彩等因素来降低模型对色彩的敏感度。可以说，在当年AlexNet的成功中，图像增广技术功不可没。
+  
+模型微调：
+微调步骤：
+1、在源数据集（如ImageNet数据集）上预训练一个神经网络模型，即源模型。
+2、创建一个新的神经网络模型，即目标模型。它复制了源模型上除了输出层外的所有模型设计及其参数。
+   我们假设这些模型参数包含了源数据集上学习到的知识，且这些知识同样适用于目标数据集。
+   我们还假设源模型的输出层跟源数据集的标签紧密相关，因此在目标模型中不予采用。
+3、为目标模型添加一个输出大小为目标数据集类别个数的输出层，并随机初始化该层的模型参数。
+4、在目标数据集（如椅子数据集）上训练目标模型。我们将从头训练输出层，而其余层的参数都是基于源模型的参数微调得到的。
+
+
+
+
+
+
+
